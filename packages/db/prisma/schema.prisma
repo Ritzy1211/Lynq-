@@ -1,0 +1,395 @@
+// =============================================================================
+// Lynq — Prisma schema
+//
+// Multi-tenant model: every tenant-scoped table carries `tenantId` (and most
+// also carry `branchId`). Row-level security policies in
+// `prisma/migrations/<ts>_rls/migration.sql` enforce isolation at the DB layer
+// using a per-request `app.current_tenant` GUC set by the NestJS guard.
+// =============================================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  output          = "../src/generated/client"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgcrypto]
+}
+
+// ---- Tenancy ----------------------------------------------------------------
+
+model Tenant {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String   @unique
+  status    String   @default("active")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  branches        Branch[]
+  users           User[]
+  customers       Customer[]
+  serviceTypes    ServiceType[]
+  garmentTypes    GarmentType[]
+  priceRules      PriceRule[]
+  orders          Order[]
+  payments        Payment[]
+  inventoryItems  InventoryItem[]
+  stockMovements  StockMovement[]
+  notifications   NotificationLog[]
+  auditLogs       AuditLog[]
+  promoCodes      PromoCode[]
+
+  @@map("tenants")
+}
+
+model Branch {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @db.Uuid
+  name      String
+  address   String?
+  phone     String?
+  timezone  String   @default("Africa/Lagos")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  users          UserBranch[]
+  orders         Order[]
+  inventoryItems InventoryItem[]
+  stockMovements StockMovement[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("branches")
+}
+
+// ---- Identity ---------------------------------------------------------------
+
+model User {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @db.Uuid
+  externalAuthId String? @unique // Supabase / Clerk subject
+  email         String?
+  phone         String?
+  fullName      String
+  role          String   // owner | manager | staff | driver
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branches UserBranch[]
+  auditLogs AuditLog[]
+
+  @@unique([tenantId, email])
+  @@unique([tenantId, phone])
+  @@index([tenantId])
+  @@map("users")
+}
+
+model UserBranch {
+  userId    String   @db.Uuid
+  branchId  String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@id([userId, branchId])
+  @@map("user_branches")
+}
+
+model Customer {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @db.Uuid
+  fullName  String
+  phone     String
+  email     String?
+  address   String?
+  notes     String?
+  loyaltyPoints Int  @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orders Order[]
+
+  @@unique([tenantId, phone])
+  @@index([tenantId])
+  @@map("customers")
+}
+
+// ---- Service catalog & pricing ---------------------------------------------
+
+model ServiceType {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @db.Uuid
+  name        String   // e.g. Wash & Iron, Dry Clean, Iron Only
+  code        String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  priceRules PriceRule[]
+  orderItems OrderItem[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@map("service_types")
+}
+
+model GarmentType {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @db.Uuid
+  name      String   // e.g. Shirt, Trouser, Suit, Gown
+  code      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  priceRules PriceRule[]
+  orderItems OrderItem[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@map("garment_types")
+}
+
+model PriceRule {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @db.Uuid
+  serviceTypeId  String   @db.Uuid
+  garmentTypeId  String   @db.Uuid
+  unitPriceKobo  Int
+  effectiveFrom  DateTime @default(now())
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  serviceType ServiceType @relation(fields: [serviceTypeId], references: [id], onDelete: Cascade)
+  garmentType GarmentType @relation(fields: [garmentTypeId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, serviceTypeId, garmentTypeId])
+  @@index([tenantId])
+  @@map("price_rules")
+}
+
+// ---- Orders -----------------------------------------------------------------
+
+model Order {
+  id                String   @id @default(uuid()) @db.Uuid
+  tenantId          String   @db.Uuid
+  branchId          String   @db.Uuid
+  customerId        String?  @db.Uuid
+  number            String   // human-readable, unique per tenant (e.g. LYNQ-000123)
+  status            String   @default("received")
+  fulfillmentMode   String   @default("walkin") // walkin | pickup_delivery
+  subtotalKobo      Int      @default(0)
+  discountKobo      Int      @default(0)
+  vatKobo           Int      @default(0)
+  totalKobo         Int      @default(0)
+  paidKobo          Int      @default(0)
+  paymentStatus     String   @default("pending") // pending | paid | refunded | failed
+  promoCode         String?
+  pickupAt          DateTime?
+  promisedReadyAt   DateTime?
+  completedAt       DateTime?
+  addressLine       String?
+  notes             String?
+  createdByUserId   String?  @db.Uuid
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  tenant       Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch       Branch             @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  customer     Customer?          @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  items        OrderItem[]
+  statusEvents OrderStatusEvent[]
+  payments     Payment[]
+  notifications NotificationLog[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, branchId, status])
+  @@index([tenantId, createdAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @db.Uuid
+  orderId       String   @db.Uuid
+  serviceTypeId String   @db.Uuid
+  garmentTypeId String   @db.Uuid
+  quantity      Int
+  unitPriceKobo Int
+  subtotalKobo  Int
+  status        String   @default("received")
+  garmentTag    String   // QR-encoded short code, unique per tenant
+  notes         String?
+  photoKeys     String[] // R2 object keys
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  order       Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  serviceType ServiceType @relation(fields: [serviceTypeId], references: [id], onDelete: Restrict)
+  garmentType GarmentType @relation(fields: [garmentTypeId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, garmentTag])
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model OrderStatusEvent {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @db.Uuid
+  orderId      String   @db.Uuid
+  fromStatus   String?
+  toStatus     String
+  reason       String?
+  actorUserId  String?  @db.Uuid
+  createdAt    DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, orderId])
+  @@map("order_status_events")
+}
+
+// ---- Payments ---------------------------------------------------------------
+
+model Payment {
+  id              String   @id @default(uuid()) @db.Uuid
+  tenantId        String   @db.Uuid
+  orderId         String   @db.Uuid
+  provider        String   // paystack | flutterwave | cash | pos_terminal
+  method          String   // cash | card | transfer | pos_terminal | mobile_money
+  status          String   @default("pending") // pending | paid | refunded | failed
+  amountKobo      Int
+  providerRef     String?  @unique
+  providerPayload Json?
+  paidAt          DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, orderId])
+  @@map("payments")
+}
+
+// ---- Inventory --------------------------------------------------------------
+
+model InventoryItem {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @db.Uuid
+  branchId       String   @db.Uuid
+  name           String
+  sku            String
+  unit           String   @default("unit") // unit | litre | kg | piece
+  reorderLevel   Int      @default(0)
+  currentStock   Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant    Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch    Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  movements StockMovement[]
+
+  @@unique([tenantId, branchId, sku])
+  @@index([tenantId, branchId])
+  @@map("inventory_items")
+}
+
+model StockMovement {
+  id              String   @id @default(uuid()) @db.Uuid
+  tenantId        String   @db.Uuid
+  branchId        String   @db.Uuid
+  inventoryItemId String   @db.Uuid
+  delta           Int      // positive = in, negative = out
+  reason          String   // received | consumed | adjusted | wastage
+  referenceId     String?  @db.Uuid // optional link to an order id
+  note            String?
+  createdAt       DateTime @default(now())
+
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch        Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, branchId])
+  @@map("stock_movements")
+}
+
+// ---- Promotions -------------------------------------------------------------
+
+model PromoCode {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @db.Uuid
+  code         String
+  description  String?
+  percentOff   Int?     // 0-100
+  amountOffKobo Int?
+  startsAt     DateTime?
+  endsAt       DateTime?
+  maxRedemptions Int?
+  redemptions  Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, code])
+  @@map("promo_codes")
+}
+
+// ---- Notifications ----------------------------------------------------------
+
+model NotificationLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @db.Uuid
+  orderId    String?  @db.Uuid
+  channel    String   // whatsapp | sms | email
+  template   String
+  recipient  String
+  status     String   @default("queued") // queued | sent | delivered | failed
+  payload    Json?
+  providerRef String?
+  error      String?
+  createdAt  DateTime @default(now())
+  sentAt     DateTime?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order  Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@map("notification_logs")
+}
+
+// ---- Audit ------------------------------------------------------------------
+
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @db.Uuid
+  actorUserId String?  @db.Uuid
+  action      String
+  entityType  String
+  entityId    String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actor  User?  @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@map("audit_logs")
+}
