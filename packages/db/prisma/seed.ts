@@ -65,6 +65,15 @@ async function main() {
       { name: 'Trouser', code: 'TROUSER' },
       { name: 'Suit (2-piece)', code: 'SUIT_2PC' },
       { name: 'Gown', code: 'GOWN' },
+      { name: 'Bedsheet', code: 'BEDSHEET' },
+      { name: 'Duvet', code: 'DUVET' },
+      { name: 'Pillow case', code: 'PILLOW_CASE' },
+      { name: 'Shorts', code: 'SHORTS' },
+      { name: 'Jacket', code: 'JACKET' },
+      { name: 'Robe', code: 'ROBE' },
+      { name: 'Night wear', code: 'NIGHT_WEAR' },
+      { name: 'Cap', code: 'CAP' },
+      { name: 'Singlet', code: 'SINGLET' },
     ].map((g) =>
       prisma.garmentType.upsert({
         where: { tenantId_code: { tenantId: tenant.id, code: g.code } },
@@ -75,10 +84,52 @@ async function main() {
   );
 
   // Simple price grid (kobo) — Wash&Iron / DryClean / IronOnly per garment.
+  // Prices are sensible Lagos defaults; staff can change them in Settings → Catalog.
   const priceMatrix: Record<string, Record<string, number>> = {
-    WASH_IRON: { SHIRT: 80000, TROUSER: 100000, SUIT_2PC: 250000, GOWN: 200000 },
-    DRY_CLEAN: { SHIRT: 150000, TROUSER: 180000, SUIT_2PC: 450000, GOWN: 350000 },
-    IRON_ONLY: { SHIRT: 30000, TROUSER: 40000, SUIT_2PC: 100000, GOWN: 80000 },
+    WASH_IRON: {
+      SHIRT: 80000,
+      TROUSER: 100000,
+      SUIT_2PC: 250000,
+      GOWN: 200000,
+      BEDSHEET: 150000,
+      DUVET: 400000,
+      PILLOW_CASE: 40000,
+      SHORTS: 60000,
+      JACKET: 120000,
+      ROBE: 100000,
+      NIGHT_WEAR: 70000,
+      CAP: 40000,
+      SINGLET: 40000,
+    },
+    DRY_CLEAN: {
+      SHIRT: 150000,
+      TROUSER: 180000,
+      SUIT_2PC: 450000,
+      GOWN: 350000,
+      BEDSHEET: 250000,
+      DUVET: 700000,
+      PILLOW_CASE: 70000,
+      SHORTS: 120000,
+      JACKET: 250000,
+      ROBE: 200000,
+      NIGHT_WEAR: 150000,
+      CAP: 80000,
+      SINGLET: 80000,
+    },
+    IRON_ONLY: {
+      SHIRT: 30000,
+      TROUSER: 40000,
+      SUIT_2PC: 100000,
+      GOWN: 80000,
+      BEDSHEET: 60000,
+      // Duvet & cap are not typically ironed — left blank intentionally.
+      PILLOW_CASE: 20000,
+      SHORTS: 30000,
+      JACKET: 50000,
+      ROBE: 40000,
+      NIGHT_WEAR: 35000,
+      SINGLET: 20000,
+    },
   };
 
   for (const svc of services) {

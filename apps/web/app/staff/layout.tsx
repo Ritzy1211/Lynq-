@@ -8,6 +8,7 @@ const NAV = [
   { href: '/staff/balances', label: 'Unpaid balances' },
   { href: '/staff/notifications', label: 'Notifications' },
   { href: '/staff/reports', label: 'End-of-day report' },
+  { href: '/staff/catalog', label: 'Catalog' },
 ];
 
 export default function StaffLayout({ children }: { children: React.ReactNode }) {
