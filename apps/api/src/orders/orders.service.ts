@@ -10,7 +10,14 @@ import { PricingService } from '../pricing/pricing.service';
 import { NotificationsService } from '../notifications/notifications.service';
 
 /** Statuses that should trigger an outbound notification to the customer. */
-const NOTIFY_STATUSES: ReadonlySet<OrderStatus> = new Set(['washing', 'ironing', 'ready', 'delivered', 'cancelled']);
+const NOTIFY_STATUSES: ReadonlySet<OrderStatus> = new Set([
+  'received',
+  'washing',
+  'ironing',
+  'ready',
+  'delivered',
+  'cancelled',
+]);
 
 export interface ListOrdersFilters {
   status?: OrderStatus;
@@ -33,7 +40,7 @@ export class OrdersService {
   async create(tenantId: string, actorUserId: string, input: CreateOrderInput) {
     const quote = await this.pricing.quote(tenantId, input);
 
-    return this.prisma.withTenant(tenantId, async (tx) => {
+    const created = await this.prisma.withTenant(tenantId, async (tx) => {
       // Single-shop simplification: always attach to the tenant's first branch.
       const branch = await tx.branch.findFirst({
         where: { tenantId, isActive: true },
@@ -125,6 +132,17 @@ export class OrdersService {
 
       return order;
     });
+
+    // Fire-and-record "order received" notification outside the transaction so
+    // a provider failure never rolls back the order create. The notifier
+    // swallows its own errors and stores every attempt in NotificationLog.
+    if (NOTIFY_STATUSES.has('received')) {
+      await this.notifications
+        .notifyStatusChange(tenantId, created.id, 'received')
+        .catch(() => undefined);
+    }
+
+    return created;
   }
 
   async findById(tenantId: string, id: string) {

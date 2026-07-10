@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CHANNEL_REGISTRY, ChannelName, ChannelRegistry } from './providers/channel-registry';
 
 const NOTIFIABLE_STATUSES: ReadonlySet<OrderStatus> = new Set([
+  'received',
   'washing',
   'ironing',
   'ready',
@@ -224,6 +225,8 @@ function renderMessage(orderNumber: string, name: string, status: OrderStatus): 
   const firstName = name.split(' ')[0] || name;
   const label = ORDER_STATUS_LABELS[status] ?? status;
   switch (status) {
+    case 'received':
+      return `Hi ${firstName}, we've received your order ${orderNumber} and it's now being processed. We'll message you at every stage. Thank you for choosing us!`;
     case 'washing':
       return `Hi ${firstName}, your order ${orderNumber} is now being washed. We'll keep you posted.`;
     case 'ironing':
